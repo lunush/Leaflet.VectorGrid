@@ -1,7 +1,7 @@
-import {} from './Leaflet.Renderer.SVG.Tile.js';
-import { PointSymbolizer } from './Symbolizer.Point.js';
-import { LineSymbolizer } from './Symbolizer.Line.js';
-import { FillSymbolizer } from './Symbolizer.Fill.js';
+import {} from "./Leaflet.Renderer.SVG.Tile.js";
+import { PointSymbolizer } from "./Symbolizer.Point.js";
+import { LineSymbolizer } from "./Symbolizer.Line.js";
+import { FillSymbolizer } from "./Symbolizer.Fill.js";
 
 /* 🍂class VectorGrid
  * 🍂inherits GridLayer
@@ -15,259 +15,316 @@ import { FillSymbolizer } from './Symbolizer.Fill.js';
  */
 
 L.VectorGrid = L.GridLayer.extend({
+  options: {
+    // 🍂option rendererFactory = L.svg.tile
+    // A factory method which will be used to instantiate the per-tile renderers.
+    rendererFactory: L.svg.tile,
 
-	options: {
-		// 🍂option rendererFactory = L.svg.tile
-		// A factory method which will be used to instantiate the per-tile renderers.
-		rendererFactory: L.svg.tile,
+    // 🍂option vectorTileLayerStyles: Object = {}
+    // A data structure holding initial symbolizer definitions for the vector features.
+    vectorTileLayerStyles: {},
 
-		// 🍂option vectorTileLayerStyles: Object = {}
-		// A data structure holding initial symbolizer definitions for the vector features.
-		vectorTileLayerStyles: {},
+    onEachFeature: null,
 
-		onEachFeature: null,
+    // 🍂option interactive: Boolean = false
+    // Whether this `VectorGrid` fires `Interactive Layer` events.
+    interactive: false,
 
-		// 🍂option interactive: Boolean = false
-		// Whether this `VectorGrid` fires `Interactive Layer` events.
-		interactive: false,
+    // 🍂option getFeatureId: Function = undefined
+    // A function that, given a vector feature, returns an unique identifier for it, e.g.
+    // `function(feat) { return feat.properties.uniqueIdField; }`.
+    // Must be defined for `setFeatureStyle` to work.
 
-		// 🍂option getFeatureId: Function = undefined
-		// A function that, given a vector feature, returns an unique identifier for it, e.g.
-		// `function(feat) { return feat.properties.uniqueIdField; }`.
-		// Must be defined for `setFeatureStyle` to work.
-	},
+    // 🍂option filter: Function = undefined
+    // A Function that will be used to decide whether to include a feature or not
+    // depending on feature properties and zoom, e.g.
+    // `function(properties, zoom) { return true; }`.
+    // The default is to include all features. Similar to L.GeoJSON filter option.
+  },
 
-	initialize: function(options) {
-		L.setOptions(this, options);
-		L.GridLayer.prototype.initialize.apply(this, arguments);
-		if (this.options.getFeatureId) {
-			this._vectorTiles = {};
-			this._overriddenStyles = {};
-		}
-		this._dataLayerNames = {};
-		this._userLayers = {};
-		this.on('tileunload', function(e) {
-			this._tileUnload(e);
-		}, this);
-        },
+  initialize: function (options) {
+    L.setOptions(this, options);
+    L.GridLayer.prototype.initialize.apply(this, arguments);
+    if (this.options.getFeatureId) {
+      this._vectorTiles = {};
+      this._overriddenStyles = {};
+    }
+    this._dataLayerNames = {};
+    this._userLayers = {};
+    this.on(
+      "tileunload",
+      function (e) {
+        this._tileUnload(e);
+      },
+      this
+    );
+  },
 
-	createTile: function(coords, done) {
-		var storeFeatures = this.options.getFeatureId;
-		var onEachFeature = this.options.onEachFeature;
+  createTile: function (coords, done) {
+    var storeFeatures = this.options.getFeatureId;
+    var onEachFeature = this.options.onEachFeature;
 
-		var tileSize = this.getTileSize();
-		var renderer = this.options.rendererFactory(coords, tileSize, this.options);
+    var tileSize = this.getTileSize();
+    var renderer = this.options.rendererFactory(coords, tileSize, this.options);
 
-		var vectorTilePromise = this._getVectorTilePromise(coords);
+    var tileBounds = this._tileCoordsToBounds(coords);
 
-		if (storeFeatures) {
-			this._vectorTiles[this._tileCoordsToKey(coords)] = renderer;
-			renderer._features = {};
-		}
+    var vectorTilePromise = this._getVectorTilePromise(coords, tileBounds);
 
-		vectorTilePromise.then( function renderTile(vectorTile) {
-			for (var layerName in vectorTile.layers) {
-				this._dataLayerNames[layerName] = true;
-				var layer = vectorTile.layers[layerName];
+    if (storeFeatures) {
+      this._vectorTiles[this._tileCoordsToKey(coords)] = renderer;
+      renderer._features = {};
+    }
 
-				var pxPerExtent = this.getTileSize().divideBy(layer.extent);
+    vectorTilePromise.then(
+      function renderTile(vectorTile) {
+        if (vectorTile.layers && vectorTile.layers.length !== 0) {
+          for (var layerName in vectorTile.layers) {
+            this._dataLayerNames[layerName] = true;
+            var layer = vectorTile.layers[layerName];
 
-				var layerStyle = this.options.vectorTileLayerStyles[ layerName ] ||
-				L.Path.prototype.options;
+            var pxPerExtent = this.getTileSize().divideBy(layer.extent);
 
-				for (var i = 0; i < layer.features.length; i++) {
-					var feat = layer.features[i];
-					var id;
+            var layerStyle =
+              this.options.vectorTileLayerStyles[layerName] ||
+              L.Path.prototype.options;
 
-					var styleOptions = layerStyle;
-					if (storeFeatures) {
-						id = this.options.getFeatureId(feat);
-						var styleOverride = this._overriddenStyles[id];
-						if (styleOverride) {
-							if (styleOverride[layerName]) {
-								styleOptions = styleOverride[layerName];
-							} else {
-								styleOptions = styleOverride;
-							}
-						}
-					}
+            for (var i = 0; i < layer.features.length; i++) {
+              var feat = layer.features[i];
+              var id;
 
-					if (styleOptions instanceof Function) {
-						styleOptions = styleOptions(feat.properties, coords.z);
-					}
+              if (
+                this.options.filter instanceof Function &&
+                !this.options.filter(feat.properties, coords.z)
+              ) {
+                continue;
+              }
 
-					if (!(styleOptions instanceof Array)) {
-						styleOptions = [styleOptions];
-					}
+              var styleOptions = layerStyle;
+              if (storeFeatures) {
+                id = this.options.getFeatureId(feat);
+                var styleOverride = this._overriddenStyles[id];
+                if (styleOverride) {
+                  if (styleOverride[layerName]) {
+                    styleOptions = styleOverride[layerName];
+                  } else {
+                    styleOptions = styleOverride;
+                  }
+                }
+              }
 
-					if (!styleOptions.length) {
-						if (onEachFeature) {
-							onEachFeature.call(this, feat, null, layer, coords);
-						}
-						continue;
-					}
+              if (styleOptions instanceof Function) {
+                styleOptions = styleOptions(feat.properties, coords.z);
+              }
 
-					var featureLayer = this._createLayer(feat, pxPerExtent);
+              if (!(styleOptions instanceof Array)) {
+                styleOptions = [styleOptions];
+              }
 
-					if (onEachFeature) {
-						onEachFeature.call(this, feat, null, layer, coords);
-					}
+              if (!styleOptions.length) {
+                if (onEachFeature) {
+                  onEachFeature.call(this, feat, null, layer, coords);
+                }
+                continue;
+              }
 
-					for (var j = 0; j < styleOptions.length; j++) {
-						var style = L.extend({}, L.Path.prototype.options, styleOptions[j]);
-						featureLayer.render(renderer, style);
-						renderer._addPath(featureLayer);
-					}
+              var featureLayer = this._createLayer(feat, pxPerExtent);
 
-					if (this.options.interactive) {
-						featureLayer.makeInteractive();
-					}
+              if (onEachFeature) {
+                onEachFeature.call(this, feat, null, layer, coords);
+              }
 
-					if (storeFeatures) {
-						renderer._features[id] = {
-							layerName: layerName,
-							feature: featureLayer
-						};
-					}
-				}
+              for (var j = 0; j < styleOptions.length; j++) {
+                var style = L.extend(
+                  {},
+                  L.Path.prototype.options,
+                  styleOptions[j]
+                );
+                featureLayer.render(renderer, style);
+                renderer._addPath(featureLayer);
+              }
 
-			}
-			if (this._map != null) {
-				renderer.addTo(this._map);
-			}
-			L.Util.requestAnimFrame(done.bind(coords, null, null));
-		}.bind(this));
+              if (this.options.interactive) {
+                featureLayer.makeInteractive();
+              }
 
-		return renderer.getContainer();
-	},
+              if (storeFeatures) {
+                // multiple features may share the same id, add them
+                // to an array of features
+                if (!renderer._features[id]) {
+                  renderer._features[id] = [];
+                }
 
-	// 🍂method setFeatureStyle(id: Number, layerStyle: L.Path Options): this
-	// Given the unique ID for a vector features (as per the `getFeatureId` option),
-	// re-symbolizes that feature across all tiles it appears in.
-	setFeatureStyle: function(id, layerStyle) {
-		this._overriddenStyles[id] = layerStyle;
+                renderer._features[id].push({
+                  layerName: layerName,
+                  feature: featureLayer,
+                });
+              }
+            }
+          }
+        }
 
-		for (var tileKey in this._vectorTiles) {
-			var tile = this._vectorTiles[tileKey];
-			var features = tile._features;
-			var data = features[id];
-			if (data) {
-				var feat = data.feature;
+        if (this._map != null) {
+          renderer.addTo(this._map);
+        }
 
-				var styleOptions = layerStyle;
-				if (layerStyle[data.layerName]) {
-					styleOptions = layerStyle[data.layerName];
-				}
+        L.Util.requestAnimFrame(done.bind(coords, null, null));
+      }.bind(this)
+    );
 
-				this._updateStyles(feat, tile, styleOptions);
-			}
-		}
-		return this;
-	},
+    return renderer.getContainer();
+  },
 
-	// 🍂method setFeatureStyle(id: Number): this
-	// Reverts the effects of a previous `setFeatureStyle` call.
-	resetFeatureStyle: function(id) {
-		delete this._overriddenStyles[id];
+  // 🍂method setFeatureStyle(id: Number, layerStyle: L.Path Options): this
+  // Given the unique ID for a vector features (as per the `getFeatureId` option),
+  // re-symbolizes that feature across all tiles it appears in.
+  setFeatureStyle: function (id, layerStyle) {
+    this._overriddenStyles[id] = layerStyle;
 
-		for (var tileKey in this._vectorTiles) {
-			var tile = this._vectorTiles[tileKey];
-			var features = tile._features;
-			var data = features[id];
-			if (data) {
-				var feat = data.feature;
-				var styleOptions = this.options.vectorTileLayerStyles[ data.layerName ] ||
-				L.Path.prototype.options;
-				this._updateStyles(feat, tile, styleOptions);
-			}
-		}
-		return this;
-	},
+    for (var tileKey in this._vectorTiles) {
+      var tile = this._vectorTiles[tileKey];
+      var features = tile._features[id];
+      if (features) {
+        for (var i = 0; i < features.length; i++) {
+          var feature = features[i];
 
-	// 🍂method getDataLayerNames(): Array
-	// Returns an array of strings, with all the known names of data layers in
-	// the vector tiles displayed. Useful for introspection.
-	getDataLayerNames: function() {
-		return Object.keys(this._dataLayerNames);
-	},
+          var styleOptions = layerStyle;
+          if (layerStyle[feature.layerName]) {
+            styleOptions = layerStyle[feature.layerName];
+          }
 
-	vtGeometryToPoint: function(geometry, vtLayer, tileCoords) {
-		var pxPerExtent = this.getTileSize().x / vtLayer.extent;
-		var tileSize = this.getTileSize();
-		var offset = tileCoords.scaleBy(tileSize);
-		var point;
-		if (typeof geometry[0] === 'object' && 'x' in geometry[0]) {
-			// Protobuf vector tiles return [{x: , y:}]
-			point = L.point(offset.x + (geometry[0].x * pxPerExtent), offset.y + (geometry[0].y * pxPerExtent));
-		} else {
-			// Geojson-vt returns [,]
-			point = L.point(offset.x + (geometry[0] * pxPerExtent), offset.y + (geometry[1] * pxPerExtent));
-		}
-		return point;
-	},
+          this._updateStyles(feature.feature, tile, styleOptions);
+        }
+      }
+    }
+    return this;
+  },
 
-	vtGeometryToLatLng: function(geometry, vtLayer, tileCoords) {
-		return this._map.unproject(this.vtGeometryToPoint(geometry, vtLayer, tileCoords));
-	},
+  // 🍂method setFeatureStyle(id: Number): this
+  // Reverts the effects of a previous `setFeatureStyle` call.
+  resetFeatureStyle: function (id) {
+    delete this._overriddenStyles[id];
 
-	addUserLayer: function(userLayer, tileCoords) {
-		var tileKey = this._tileCoordsToKey(tileCoords);
-		this._userLayers[tileKey] = this._userLayers[tileKey] || [];
-		this._userLayers[tileKey].push(userLayer);
-		this._map.addLayer(userLayer);
-	},
+    for (var tileKey in this._vectorTiles) {
+      var tile = this._vectorTiles[tileKey];
+      var features = tile._features[id];
+      if (features) {
+        for (var i = 0; i < features.length; i++) {
+          var feature = features[i];
 
-	_tileUnload: function(e) {
-		var tileKey = this._tileCoordsToKey(e.coords);
-		if (this._vectorTiles) {
-			delete this._vectorTiles[tileKey];
-		}
-		var userLayers = this._userLayers[tileKey];
-		if (!userLayers) {
-			return;
-		}
-		for(var i = 0; i < userLayers.length; i++) {
-			console.log('remove layer');
-			this._map.removeLayer(userLayers[i]);
-		}
-		delete this._userLayers[tileKey];
-	},
+          var styleOptions =
+            this.options.vectorTileLayerStyles[feature.layerName] ||
+            L.Path.prototype.options;
+          this._updateStyles(feature.feature, tile, styleOptions);
+        }
+      }
+    }
+    return this;
+  },
 
-	_updateStyles: function(feat, renderer, styleOptions) {
-		styleOptions = (styleOptions instanceof Function) ?
-			styleOptions(feat.properties, renderer.getCoord().z) :
-			styleOptions;
+  // 🍂method setFilter(filterFn: Function): this
+  // Sets filter function to filter displayed features.
+  setFilter: function (filterFn) {
+    this.options.filter = filterFn;
+    this.redraw();
+    return this;
+  },
 
-		if (!(styleOptions instanceof Array)) {
-			styleOptions = [styleOptions];
-		}
+  // 🍂method getDataLayerNames(): Array
+  // Returns an array of strings, with all the known names of data layers in
+  // the vector tiles displayed. Useful for introspection.
+  getDataLayerNames: function () {
+    return Object.keys(this._dataLayerNames);
+  },
 
-		for (var j = 0; j < styleOptions.length; j++) {
-			var style = L.extend({}, L.Path.prototype.options, styleOptions[j]);
-			feat.updateStyle(renderer, style);
-		}
-	},
+  vtGeometryToPoint: function (geometry, vtLayer, tileCoords) {
+    var pxPerExtent = this.getTileSize().x / vtLayer.extent;
+    var tileSize = this.getTileSize();
+    var offset = tileCoords.scaleBy(tileSize);
+    var point;
+    if (typeof geometry[0] === "object" && "x" in geometry[0]) {
+      // Protobuf vector tiles return [{x: , y:}]
+      point = L.point(
+        offset.x + geometry[0].x * pxPerExtent,
+        offset.y + geometry[0].y * pxPerExtent
+      );
+    } else {
+      // Geojson-vt returns [,]
+      point = L.point(
+        offset.x + geometry[0] * pxPerExtent,
+        offset.y + geometry[1] * pxPerExtent
+      );
+    }
+    return point;
+  },
 
-	_createLayer: function(feat, pxPerExtent, layerStyle) {
-		var layer;
-		switch (feat.type) {
-		case 1:
-			layer = new PointSymbolizer(feat, pxPerExtent);
-			break;
-		case 2:
-			layer = new LineSymbolizer(feat, pxPerExtent);
-			break;
-		case 3:
-			layer = new FillSymbolizer(feat, pxPerExtent);
-			break;
-		}
+  vtGeometryToLatLng: function (geometry, vtLayer, tileCoords) {
+    return this._map.unproject(
+      this.vtGeometryToPoint(geometry, vtLayer, tileCoords)
+    );
+  },
 
-		if (this.options.interactive) {
-			layer.addEventParent(this);
-		}
+  addUserLayer: function (userLayer, tileCoords) {
+    var tileKey = this._tileCoordsToKey(tileCoords);
+    this._userLayers[tileKey] = this._userLayers[tileKey] || [];
+    this._userLayers[tileKey].push(userLayer);
+    this._map.addLayer(userLayer);
+  },
 
-		return layer;
-	},
+  _tileUnload: function (e) {
+    var tileKey = this._tileCoordsToKey(e.coords);
+    if (this._vectorTiles) {
+      delete this._vectorTiles[tileKey];
+    }
+    var userLayers = this._userLayers[tileKey];
+    if (!userLayers) {
+      return;
+    }
+    for (var i = 0; i < userLayers.length; i++) {
+      console.log("remove layer");
+      this._map.removeLayer(userLayers[i]);
+    }
+    delete this._userLayers[tileKey];
+  },
+
+  _updateStyles: function (feat, renderer, styleOptions) {
+    styleOptions =
+      styleOptions instanceof Function
+        ? styleOptions(feat.properties, renderer.getCoord().z)
+        : styleOptions;
+
+    if (!(styleOptions instanceof Array)) {
+      styleOptions = [styleOptions];
+    }
+
+    for (var j = 0; j < styleOptions.length; j++) {
+      var style = L.extend({}, L.Path.prototype.options, styleOptions[j]);
+      feat.updateStyle(renderer, style);
+    }
+  },
+
+  _createLayer: function (feat, pxPerExtent, layerStyle) {
+    var layer;
+    switch (feat.type) {
+      case 1:
+        layer = new PointSymbolizer(feat, pxPerExtent);
+        //prevent leaflet from treating these canvas points as real markers
+        layer.getLatLng = null;
+        break;
+      case 2:
+        layer = new LineSymbolizer(feat, pxPerExtent);
+        break;
+      case 3:
+        layer = new FillSymbolizer(feat, pxPerExtent);
+        break;
+    }
+
+    if (this.options.interactive) {
+      layer.addEventParent(this);
+    }
+
+    return layer;
+  },
 });
 
 /*
@@ -281,6 +338,5 @@ L.VectorGrid = L.GridLayer.extend({
  *
  */
 L.vectorGrid = function (options) {
-	return new L.VectorGrid(options);
+  return new L.VectorGrid(options);
 };
-
