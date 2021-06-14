@@ -11,7 +11,12 @@
     "lintfix": "eslint --fix src",
     "start": "node_modules/.bin/gobble"
   },
-  "keywords": ["leaflet", "vector", "geojson", "topojson"],
+  "keywords": [
+    "leaflet",
+    "vector",
+    "geojson",
+    "topojson"
+  ],
   "authors": [
     "Iván Sánchez Ortega <ivan@sanchezortega.es>",
     "Per Liedman <per@liedman.net>"
